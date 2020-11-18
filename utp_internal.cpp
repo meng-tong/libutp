@@ -1618,7 +1618,7 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 	// variable is the RTT in microseconds
 
 	assert(min_rtt >= 0);
-	int32 our_delay = min<uint32>(our_hist.get_value(), uint32(min_rtt));
+	int32 our_delay = our_hist.get_value();
 	assert(our_delay != INT_MAX);
 	assert(our_delay >= 0);
 
