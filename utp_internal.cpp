@@ -488,6 +488,8 @@ struct UTPSocket {
 	uint rtt_var;
 	// Round trip timeout
 	uint rto;
+	// Minimum round trip time seen through connection lifetime.
+	uint conn_min_rtt;
 	DelayHist rtt_hist;
 	uint retransmit_timeout;
 	// The RTO timer will timeout here.
@@ -1360,12 +1362,15 @@ int UTPSocket::ack_packet(uint16 seq)
 
 	// if we never re-sent the packet, update the RTT estimate
 	if (pkt->transmissions == 1) {
+		const uint64 now_us = utp_call_get_microseconds(this->ctx, this);
 		// Estimate the round trip time.
-		const uint32 ertt = (uint32)((utp_call_get_microseconds(this->ctx, this) - pkt->time_sent) / 1000);
+		const uint32 ertt = (uint32)((now_us - pkt->time_sent) / 1000);
+		const uint32 ertt_us = (uint32)(now_us - pkt->time_sent);
 		if (rtt == 0) {
 			// First round trip time sample
 			rtt = ertt;
 			rtt_var = ertt / 2;
+			conn_min_rtt = ertt_us;
 			// sanity check. rtt should never be more than 6 seconds
 //			assert(rtt < 6000);
 		} else {
@@ -1373,6 +1378,7 @@ int UTPSocket::ack_packet(uint16 seq)
 			const int delta = (int)rtt - ertt;
 			rtt_var = rtt_var + (int)(abs(delta) - rtt_var) / 4;
 			rtt = rtt - rtt/8 + ertt/8;
+			conn_min_rtt = min<uint>(conn_min_rtt, ertt_us);
 			// sanity check. rtt should never be more than 6 seconds
 //			assert(rtt < 6000);
 			rtt_hist.add_sample(ertt, ctx->current_ms);
@@ -2608,6 +2614,7 @@ utp_socket*	utp_create_socket(utp_context *ctx)
 	conn->retransmit_count		= 0;
 	conn->rto					= 3000;
 	conn->rtt_var				= 800;
+	conn->conn_min_rtt	= 0;
 	conn->seq_nr				= 1;
 	conn->ack_nr				= 0;
 	conn->max_window_user		= 255 * PACKET_SIZE;
