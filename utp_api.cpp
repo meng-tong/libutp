@@ -88,7 +88,7 @@ struct_utp_context::struct_utp_context()
 	// often is proportional to RTT anyway
 	// when setting a download rate limit, all sockets should have
 	// their receive buffer set much lower, to say 60 kiB or so
-	opt_rcvbuf = opt_sndbuf = 1024 * 1024;
+	opt_rcvbuf = opt_sndbuf = 512 * 1024 * 1024;
 	last_check = 0;
 }
 
