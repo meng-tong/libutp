@@ -624,6 +624,12 @@ struct UTPSocket {
 	void maybe_decay_win(uint64 current_ms)
 	{
 		if (can_decay_win(current_ms)) {
+			if (slow_down_end_time_us != 0 || next_slow_down_time_us != 0 || slow_down_recover_start_time_us != 0 || initial_slow_start) {
+				// slow down or recovery in progress, cancel the slow down status and schedule another slow down in future.
+				slow_down_end_time_us = slow_down_recover_start_time_us = 0;
+				next_slow_down_time_us = utp_call_get_microseconds(this->ctx, this) + 2 * conn_min_rtt;
+			}
+
 			// TCP uses 0.5
 			max_window = (size_t)(max_window * .5);
 			last_rwin_decay = current_ms;
@@ -1226,6 +1232,12 @@ void UTPSocket::check_timeouts()
 
 				int packet_size = get_packet_size();
 
+				// slow down or recovery in progress, cancel the slow down status and schedule another slow down in future.
+				if (slow_down_end_time_us != 0 || next_slow_down_time_us != 0 || slow_down_recover_start_time_us != 0 || initial_slow_start) {
+					slow_down_end_time_us = slow_down_recover_start_time_us = 0;
+					next_slow_down_time_us = utp_call_get_microseconds(this->ctx, this) + 2 * conn_min_rtt;
+				}
+
 				if ((cur_window_packets == 0) && ((int)max_window > packet_size)) {
 					// we don't have any packets in-flight, even though
 					// we could. This implies that the connection is just
@@ -1638,13 +1650,12 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 {
 	uint64 current_time = utp_call_get_microseconds(this->ctx, this);
 	if (slow_down_end_time_us != 0) {
-		if (current_time < slow_down_end_time_us) {
-			return;
-		} else {
+		if (current_time >= slow_down_end_time_us) {
 			slow_down_end_time_us = 0;
 			slow_start = true;
 			slow_down_recover_start_time_us = current_time;
 		}
+		return;
 	}
 
 	// the delay can never be greater than the rtt. The min_rtt
@@ -1738,6 +1749,8 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 		if (ss_cwnd > ssthresh) {
 			slow_start = false;
 			initial_slow_start = false;
+			// must guarantee cwnd exceeds ssthresh (for slow down especially).
+			max_window = ss_cwnd;
 
 			if (slow_down_recover_start_time_us != 0) {
 				next_slow_down_time_us = current_time + (current_time - slow_down_recover_start_time_us) * 9;
@@ -1746,6 +1759,8 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 		} else if (initial_slow_start && our_delay > target*0.75) {
 			slow_start = false;
 			initial_slow_start = false;
+			// must guarantee cwnd exceeds ssthresh (for slow down especially).
+			max_window = ss_cwnd;
 			ssthresh = max_window;
 
 			next_slow_down_time_us = current_time + conn_min_rtt * 2;
@@ -1762,10 +1777,16 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 	max_window = clamp<size_t>(max_window, MIN_WINDOW_SIZE, opt_sndbuf);
 
 	if (next_slow_down_time_us != 0 && current_time > next_slow_down_time_us) {
-		next_slow_down_time_us = 0;
-		ssthresh = max_window;
-		max_window = MIN_WINDOW_SIZE;
-		slow_down_end_time_us = current_time + conn_min_rtt * 2;
+		if (max_window == MIN_WINDOW_SIZE) {
+			// no need to further slow down when cwnd is already the minimum.
+			// delay the slow down in this case.
+			next_slow_down_time_us = current_time + conn_min_rtt * 2;
+		} else {
+			next_slow_down_time_us = 0;
+			ssthresh = max_window;
+			max_window = MIN_WINDOW_SIZE;
+			slow_down_end_time_us = current_time + conn_min_rtt * 2;
+		}
 	}
 
 	// used in parse_log.py
