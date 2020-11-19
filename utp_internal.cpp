@@ -60,8 +60,9 @@
 
 #define PACKET_SIZE 1435
 
-// this is the minimum max_window value. It can never drop below this
-#define MIN_WINDOW_SIZE 10
+// this is the minimum max_window value. It can never drop below this.
+// should be at least 2*MSS for LEDBAT++
+#define MIN_WINDOW_SIZE 3000
 
 // if we receive 4 or more duplicate acks, we resend the packet
 // that hasn't been acked yet
@@ -561,6 +562,8 @@ struct UTPSocket {
 
 	// true if we're in slow-start (exponential growth) phase
 	bool slow_start;
+	// true only if in initial slow-start
+	bool initial_slow_start;
 
 	// the slow-start threshold, in bytes
 	size_t ssthresh;
@@ -620,6 +623,7 @@ struct UTPSocket {
 			if (max_window < MIN_WINDOW_SIZE)
 				max_window = MIN_WINDOW_SIZE;
 			slow_start = false;
+			initial_slow_start = false;
 			ssthresh = max_window;
 		}
 	}
@@ -1226,10 +1230,11 @@ void UTPSocket::check_timeouts()
 					// our delay was so high that our congestion window
 					// was shrunk below one packet, preventing us from
 					// sending anything for one time-out period. Now, reset
-					// the congestion window to fit one packet, to start over
-					// again
-					max_window = packet_size;
+					// the congestion window to fit two packet, to start over
+					// again (two is required by LEDBAT++)
+					max_window = 2 * packet_size;
 					slow_start = true;
+					initial_slow_start = false;
 				}
 			}
 
@@ -1711,13 +1716,13 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 	size_t ledbat_cwnd = (max_window + scaled_gain < MIN_WINDOW_SIZE) ? MIN_WINDOW_SIZE : (size_t)(max_window + scaled_gain);
 
 	if (slow_start) {
-		size_t ss_cwnd = (size_t)(max_window + window_factor*get_packet_size());
+		size_t ss_cwnd = (size_t)(max_window + bytes_acked);
 		if (ss_cwnd > ssthresh) {
 			slow_start = false;
-		} else if (our_delay > target*0.9) {
-			// even if we're a little under the target delay, we conservatively
-			// discontinue the slow start phase
+			initial_slow_start = false;
+		} else if (initial_slow_start && our_delay > target*0.75) {
 			slow_start = false;
+			initial_slow_start = false;
 			ssthresh = max_window;
 		} else {
 			max_window = max(ss_cwnd, ledbat_cwnd);
@@ -2585,8 +2590,8 @@ void utp_initialize_socket(	utp_socket *conn,
 
 	conn->ctx->utp_sockets->Add(UTPSocketKey(conn->addr, conn->conn_id_recv))->socket = conn;
 
-	// we need to fit one packet in the window when we start the connection
-	conn->max_window = conn->get_packet_size();
+	// we need to fit two packet (2 instead of 1 for LEDBAT++) in the window when we start the connection
+	conn->max_window = 2 * conn->get_packet_size();
 
 	#if UTP_DEBUG_LOGGING
 	conn->log(UTP_LOG_DEBUG, "UTP socket initialized");
@@ -2640,7 +2645,8 @@ utp_socket*	utp_create_socket(utp_context *ctx)
 	conn->reply_micro			= 0;
 	conn->opt_sndbuf			= ctx->opt_sndbuf;
 	conn->opt_rcvbuf			= ctx->opt_rcvbuf;
-	conn->slow_start			= true;
+	conn->slow_start					= true;
+	conn->initial_slow_start	= true;
 	conn->ssthresh				= conn->opt_sndbuf;
 	conn->clock_drift			= 0;
 	conn->clock_drift_raw		= 0;
