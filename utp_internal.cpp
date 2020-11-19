@@ -1701,6 +1701,13 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 		scaled_gain = 0;
 	}
 
+	// round up scaled gain in case integer max_window is unchanged.
+	if (scaled_gain > 0 && scaled_gain < 1) {
+		scaled_gain = 1;
+	} else if (scaled_gain < 0 && scaled_gain > -1) {
+		scaled_gain = -1;
+	}
+
 	size_t ledbat_cwnd = (max_window + scaled_gain < MIN_WINDOW_SIZE) ? MIN_WINDOW_SIZE : (size_t)(max_window + scaled_gain);
 
 	if (slow_start) {
