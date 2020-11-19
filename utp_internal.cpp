@@ -29,12 +29,16 @@
 #include <limits.h> // for UINT_MAX
 #include <time.h>
 
+#include <math.h>
+
 #include "utp_types.h"
 #include "utp_packedsockaddr.h"
 #include "utp_internal.h"
 #include "utp_hash.h"
 
 #define	TIMEOUT_CHECK_INTERVAL	500
+
+#define DEFAULT_MSS_BYTES 1500
 
 // number of bytes to increase max window size by, per RTT. This is
 // scaled down linearly proportional to off_target. i.e. if all packets
@@ -1675,14 +1679,19 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 	double window_factor = (double)min(bytes_acked, max_window) / (double)max(max_window, bytes_acked);
 
 	double delay_factor = off_target / target;
-	double scaled_gain = MAX_CWND_INCREASE_BYTES_PER_RTT * window_factor * delay_factor;
+	double increase_gain = 1.0 / (double)min(16, (int)ceil(2.0 * (double)target / (double)conn_min_rtt));
+
+	double scaled_gain = increase_gain * window_factor * DEFAULT_MSS_BYTES;
+	if (off_target < 0) {
+		scaled_gain = max(scaled_gain + max_window * delay_factor * window_factor, -0.5 * (double)max_window * window_factor);
+	}
 
 	// since MAX_CWND_INCREASE_BYTES_PER_RTT is a cap on how much the window size (max_window)
 	// may increase per RTT, we may not increase the window size more than that proportional
 	// to the number of bytes that were acked, so that once one window has been acked (one rtt)
 	// the increase limit is not exceeded
 	// the +1. is to allow for floating point imprecision
-	assert(scaled_gain <= 1. + MAX_CWND_INCREASE_BYTES_PER_RTT * (double)min(bytes_acked, max_window) / (double)max(max_window, bytes_acked));
+	// assert(scaled_gain <= 1. + MAX_CWND_INCREASE_BYTES_PER_RTT * (double)min(bytes_acked, max_window) / (double)max(max_window, bytes_acked));
 
 	if (scaled_gain > 0 && ctx->current_ms - last_maxed_out_window > 1000) {
 		// if it was more than 1 second since we tried to send a packet
