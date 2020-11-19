@@ -510,6 +510,13 @@ struct UTPSocket {
 	// Last rcv window we advertised, in bytes
 	size_t last_rcv_win;
 
+	// Next time to trigger slow down for min rtt probing
+	uint64 next_slow_down_time_us;
+	// Time that current slow down can terminate
+	uint64 slow_down_end_time_us;
+	// Time that current slow down starts to recover
+	uint64 slow_down_recover_start_time_us;
+
 	DelayHist our_hist;
 	DelayHist their_hist;
 
@@ -1629,6 +1636,17 @@ void UTPSocket::selective_ack(uint base, const byte *mask, byte len)
 
 void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 min_rtt)
 {
+	uint64 current_time = utp_call_get_microseconds(this->ctx, this);
+	if (slow_down_end_time_us != 0) {
+		if (current_time < slow_down_end_time_us) {
+			return;
+		} else {
+			slow_down_end_time_us = 0;
+			slow_start = true;
+			slow_down_recover_start_time_us = current_time;
+		}
+	}
+
 	// the delay can never be greater than the rtt. The min_rtt
 	// variable is the RTT in microseconds
 
@@ -1720,10 +1738,17 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 		if (ss_cwnd > ssthresh) {
 			slow_start = false;
 			initial_slow_start = false;
+
+			if (slow_down_recover_start_time_us != 0) {
+				next_slow_down_time_us = current_time + (current_time - slow_down_recover_start_time_us) * 9;
+				slow_down_recover_start_time_us = 0;
+			}
 		} else if (initial_slow_start && our_delay > target*0.75) {
 			slow_start = false;
 			initial_slow_start = false;
 			ssthresh = max_window;
+
+			next_slow_down_time_us = current_time + conn_min_rtt * 2;
 		} else {
 			max_window = max(ss_cwnd, ledbat_cwnd);
 		}
@@ -1735,6 +1760,13 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 	// make sure that the congestion window is below max
 	// make sure that we don't shrink our window too small
 	max_window = clamp<size_t>(max_window, MIN_WINDOW_SIZE, opt_sndbuf);
+
+	if (next_slow_down_time_us != 0 && current_time > next_slow_down_time_us) {
+		next_slow_down_time_us = 0;
+		ssthresh = max_window;
+		max_window = MIN_WINDOW_SIZE;
+		slow_down_end_time_us = current_time + conn_min_rtt * 2;
+	}
 
 	// used in parse_log.py
 	log(UTP_LOG_NORMAL, "actual_delay:%u our_delay:%d their_delay:%u off_target:%d max_window:%u "
@@ -2620,6 +2652,9 @@ utp_socket*	utp_create_socket(utp_context *ctx)
 	conn->close_requested		= false;
 	conn->fast_timeout			= false;
 	conn->rtt					= 0;
+	conn->next_slow_down_time_us = 0;
+	conn->slow_down_end_time_us = 0;
+	conn->slow_down_recover_start_time_us = 0;
 	conn->retransmit_timeout	= 0;
 	conn->rto_timeout			= 0;
 	conn->zerowindow_time		= 0;
