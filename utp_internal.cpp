@@ -628,6 +628,9 @@ struct UTPSocket {
 				// slow down or recovery in progress, cancel the slow down status and schedule another slow down in future.
 				slow_down_end_time_us = slow_down_recover_start_time_us = 0;
 				next_slow_down_time_us = utp_call_get_microseconds(this->ctx, this) + 2 * conn_min_rtt;
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+				printf("!!!!! reschedule slow down to %llu\n", next_slow_down_time_us);
+#endif
 			}
 
 			// TCP uses 0.5
@@ -1236,6 +1239,9 @@ void UTPSocket::check_timeouts()
 				if (slow_down_end_time_us != 0 || next_slow_down_time_us != 0 || slow_down_recover_start_time_us != 0 || initial_slow_start) {
 					slow_down_end_time_us = slow_down_recover_start_time_us = 0;
 					next_slow_down_time_us = utp_call_get_microseconds(this->ctx, this) + 2 * conn_min_rtt;
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+					printf("!!!!! reschedule slow down to %llu\n", next_slow_down_time_us);
+#endif
 				}
 
 				if ((cur_window_packets == 0) && ((int)max_window > packet_size)) {
@@ -1654,6 +1660,9 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 			slow_down_end_time_us = 0;
 			slow_start = true;
 			slow_down_recover_start_time_us = current_time;
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+			printf("%lld: slow down finished, recovery starts (ssthresh: %lu)\n", current_time, ssthresh);
+#endif
 		}
 		return;
 	}
@@ -1755,6 +1764,9 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 			if (slow_down_recover_start_time_us != 0) {
 				next_slow_down_time_us = current_time + (current_time - slow_down_recover_start_time_us) * 9;
 				slow_down_recover_start_time_us = 0;
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+				printf("%lld: slow down recovered, next schedule at %lld (cwnd %lu)\n", current_time, next_slow_down_time_us, max_window);
+#endif
 			}
 		} else if (initial_slow_start && our_delay > target*0.75) {
 			slow_start = false;
@@ -1764,6 +1776,9 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 			ssthresh = max_window;
 
 			next_slow_down_time_us = current_time + conn_min_rtt * 2;
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+			printf("%lld: initial slow down scheduled at %lld (cwnd %lu)\n", current_time, next_slow_down_time_us, max_window);
+#endif
 		} else {
 			max_window = max(ss_cwnd, ledbat_cwnd);
 		}
@@ -1776,16 +1791,28 @@ void UTPSocket::apply_ccontrol(size_t bytes_acked, uint32 actual_delay, int64 mi
 	// make sure that we don't shrink our window too small
 	max_window = clamp<size_t>(max_window, MIN_WINDOW_SIZE, opt_sndbuf);
 
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+	if (slow_down_recover_start_time_us != 0) {
+		printf("----- acked %lu bytes, cwnd %lu ------\n", bytes_acked, max_window);
+	}
+#endif
+
 	if (next_slow_down_time_us != 0 && current_time > next_slow_down_time_us) {
 		if (max_window == MIN_WINDOW_SIZE) {
 			// no need to further slow down when cwnd is already the minimum.
 			// delay the slow down in this case.
 			next_slow_down_time_us = current_time + conn_min_rtt * 2;
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+			printf("%lld: already min cwnd, delay slow down to %llu\n", current_time, next_slow_down_time_us);
+#endif
 		} else {
 			next_slow_down_time_us = 0;
 			ssthresh = max_window;
 			max_window = MIN_WINDOW_SIZE;
 			slow_down_end_time_us = current_time + conn_min_rtt * 2;
+#ifdef LEDBAT_PLUS_PLUS_DEBUG_
+			printf("%lld: slow down started till %lld (save %lu as ssthresh)\n", current_time, slow_down_end_time_us, ssthresh);
+#endif
 		}
 	}
 
