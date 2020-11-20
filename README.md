@@ -1,68 +1,89 @@
-# libutp - The uTorrent Transport Protocol library.
-Copyright (c) 2010 BitTorrent, Inc.
+# libutp - The uTorrent Transport Protocol library based on LEDBAT++.
 
-uTP is a TCP-like implementation of [LEDBAT][ledbat] documented as a BitTorrent
-extension in [BEP-29][bep29]. uTP provides reliable, ordered delivery
-while maintaining minimum extra delay. It is implemented on top of UDP to be
-cross-platform and functional today. As a result, uTP is the primary transport
-for uTorrent peer-to-peer connections.
+This is a [LEDBAT++][ledbatpp] extension based on the original BitTorrent uTP
+implementation of [LEDBAT][ledbat]. The preliminary extension includes the
+following changes:
 
-uTP is written in C++, but the external interface is strictly C (ANSI C89).
+1. Modified slow start, and the termination condition of observed delay
+exceeding 3/4 target delay (corresponding to 4.1 in
+[LEDBAT++ IRTF draft][ledbatpp]).
 
-## The Interface
+2. Dynamic GAIN calculated from the relative relation between base and target
+delay, for the purpose of slower rate increase (corresponding to 4.2 in LEDBAT++
+IRTF draft).
 
-The uTP socket interface is a bit different from the Berkeley socket API to
-avoid the need for our own select() implementation, and to make it easier to
-write event-based code with minimal buffering.
+3. Multiplicative decrease (corresponding to 4.3 in LEDBAT++ IRTF draft).
 
-When you create a uTP socket, you register a set of callbacks. Most notably, the
-on_read callback is a reactive callback which occurs when bytes arrive off the
-network. The write side of the socket is proactive, and you call UTP_Write to
-indicate the number of bytes you wish to write. As packets are created, the
-on_write callback is called for each packet, so you can fill the buffers with
-data.
+4. Initial and periodic slowdown for base delay probing (corresponding to 4.4 in
+LEDBAT++ IRTF draft).
 
-The libutp interface is not thread-safe. It was designed for use in a
-single-threaded asyncronous context, although with proper synchronization
-it may be used from a multi-threaded environment as well.
+5. Target delay of 60 ms instead of 100 ms in LEDBAT (suggested in 4.5 in LEDBAT++
+IRTF draft).
 
-See utp.h for more details and other API documentation.
+On basis of the above changes, when window decay happens due to loss/timeout, we
+enforce the sender to either delay the scheduled slowdown, or cancel ongoing
+slowdown, for correct behaviors.
 
-## Example
+Note that the LEDBAT++ IRTF draft also suggests replacing usage of one-way delay
+with round-trip time, to be more compatible with TCP. We did not implement that
+in this preliminary extension, which should not dramatically change LEDBAT++'s
+performance.
 
-See ucat.c. Build with:
- 
-   make ucat
 
 ## Building
 
-uTP has been known to build on Windows with MSVC and on linux and OS X with gcc.
-On Windows, use the MSVC project files (utp.sln, and friends). On other platforms,
-building the shared library is as simple as:
+As in the original uTP implementation, on non-windows platforms, building the
+shared library is as simple as:
 
     make
-
-To build one of the examples, which will statically link in everything it needs
-from libutp:
-
-    cd utp_test && make
-
-## Packaging and API
-
-The libutp API is considered unstable, and probably always will be. We encourage
-you to test with the version of libutp you have, and be mindful when upgrading.
-For this reason, it is probably also a good idea to bundle libutp with your
-application.
 
 ## License
 
 libutp is released under the [MIT][lic] license.
 
-## Related Work
+## Performance Benchmarking
 
-Research and analysis of congestion control mechanisms can be found [here.][survey]
+To demonstrate the performance of our LEDBAT++ implementation, we compare it
+with the original uTP LEDBAT codes, and Proteus-S, a scavenger protocol designed
+by ourselves (codes publicly available [here][proteuscode], published in
+[SIGCOMM 2020][proteuspaper]). Specifically, we let them compete with TCP CUBIC,
+BBR, and Proteus-P (a primary protocol also proposed in the
+[Proteus paper][proteuspaper]), respectively. An [Emulab][emulab] bottleneck
+link with 50 Mbps bandwidth, 30 ms RTT, 4 BDF buffer is used. We include the
+achieved figures of throughput trend under the [benchmarking][benchmarking]
+folder.
+
+First, the periodic slowdown distinguishes LEDBAT++ from LEDBAT when running
+alone.
+
+Then, compared with LEDBAT, LEDBAT++ is more conservative with a smaller target
+delay and slower rate increase (combined with multiplicative decrease). That can
+be validated by its lower throughput when competing with other primary protocols.
+
+However, the slower rate increase also causes much longer ramp-up time, e.g.,
+LEDBAT++ needs around 20 seconds to recover after the competing CUBIC flow
+terminates. Such a slower rate increase in LEDBAT++ can also be observed in its
+process of slowly taking up the bandwidth when competing with BBR.
+
+In comparison, Proteus-S, as claimed in the [SIGCOMM paper][proteuspaper], is a
+more robust scavenger, especially against latency-sensitive protocols such as
+Proteus-P.
+
+## Notes
+
+We should strengthen that this LEDBAT++ implementation is still preliminary.
+The value of all parameters and constants are adopted directly from the
+[IRTF draft][ledbatpp]. Without performance tuning through extensive evaluation,
+it may not have the same performance as Microsoft's own implementation in
+Window Server operating system.
+
 
 [ledbat]: http://datatracker.ietf.org/wg/ledbat/charter/
 [bep29]: http://www.bittorrent.org/beps/bep_0029.html
 [lic]: http://www.opensource.org/licenses/mit-license.php
 [survey]: http://datatracker.ietf.org/doc/draft-ietf-ledbat-survey/
+[ledbatpp]: https://tools.ietf.org/pdf/draft-irtf-iccrg-ledbat-plus-plus-01.pdf
+[proteuspaper]: https://dl.acm.org/doi/pdf/10.1145/3387514.3405891
+[benchmarking]: https://github.com/meng-tong/libutp/tree/master/benchmarking
+[emulab]: https://www.emulab.net/portal/frontpage.php
+[proteuscode]: https://github.com/PCCproject/PCC-Uspace/
