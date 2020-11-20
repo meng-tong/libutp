@@ -36,7 +36,7 @@
 #include "utp_packedsockaddr.h"
 
 /* These originally lived in utp_config.h */
-#define CCONTROL_TARGET (100 * 1000) // us
+#define CCONTROL_TARGET (60 * 1000) // us
 
 enum bandwidth_type_t {
 	payload_bandwidth, connect_overhead,
